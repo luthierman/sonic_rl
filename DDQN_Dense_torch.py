@@ -49,12 +49,13 @@ class DDQN(object):
         self.loss_fn = torch.nn.MSELoss()
 
         # DQN setup
-        self.buff = 20000
+        self.buff = 10000
         self.memory = ER_Memory(self.buff)
         self.counter = 0
-        self.update_target = 1
+        self.update_target = 100
+        self.learn_every = 10
         self.step = 0
-        self.train_start = 100
+        self.train_start = 1
         self.current_episode = 0
 
         # stat tracking
@@ -86,7 +87,7 @@ class DDQN(object):
         self.total_reward = 0
         total_loss = 0
         while not done:
-            # self.env.render()
+            self.env.render()
             action = self.get_action(s1)
 
             s2, reward, done, _ = self.env.step(action)
@@ -117,29 +118,29 @@ class DDQN(object):
     def learn(self):
         if len(self.memory) < self.train_start:
             return 0
+        if self.counter%self.learn_every==0:
+            minibatch = self.memory.sample(min(len(self.memory), self.batch))
+            states = self.preprocess_state(minibatch[:, 0])
+            actions = self.preprocess_state(minibatch[:, 1]).type(torch.int64).unsqueeze(-1)
+            rewards = self.preprocess_state(minibatch[:, 2])
+            next_states = self.preprocess_state(minibatch[:, 3])
+            dones = self.preprocess_state(minibatch[:, 4])
 
-        minibatch = self.memory.sample(min(len(self.memory), self.batch))
-        states = self.preprocess_state(minibatch[:, 0])
-        actions = self.preprocess_state(minibatch[:, 1]).type(torch.int64).unsqueeze(-1)
-        rewards = self.preprocess_state(minibatch[:, 2])
-        next_states = self.preprocess_state(minibatch[:, 3])
-        dones = self.preprocess_state(minibatch[:, 4])
-
-        self.q_network.train()
-        self.target.eval()
-        # DDQN
-        Q = self.q_network.forward(states).gather(1, actions).squeeze(-1)  # Q(s, a, wq)
-        A_best = self.q_network.forward(next_states).argmax(1).reshape(-1, 1)  #
-        Q_next = self.target.forward(next_states).gather(1, A_best).squeeze(-1)  # max _a Q(ns, argmax_a(Q(ns, a, wq)) , wt)
-        y = rewards + self.gamma * (1 - dones) * Q_next  # bellman
-        self.opt.zero_grad()
-        loss = self.loss_fn(y, Q)
-        loss.backward()
-        for param in self.q_network.parameters():
-            param.grad.data.clamp_(-1, 1)
-        self.opt.step()
-        return loss.item()
-
+            self.q_network.train()
+            self.target.eval()
+            # DDQN
+            Q = self.q_network.forward(states).gather(1, actions).squeeze(-1)  # Q(s, a, wq)
+            A_best = self.q_network.forward(next_states).argmax(1).reshape(-1, 1)  #
+            Q_next = self.target.forward(next_states).gather(1, A_best).squeeze(-1)  # max _a Q(ns, argmax_a(Q(ns, a, wq)) , wt)
+            y = rewards + self.gamma * (1 - dones) * Q_next  # bellman
+            self.opt.zero_grad()
+            loss = self.loss_fn(y, Q)
+            loss.backward()
+            for param in self.q_network.parameters():
+                param.grad.data.clamp_(-1, 1)
+            self.opt.step()
+            return loss.item()
+        return 0
     def sync_weights(self):
         self.target.load_state_dict(self.q_network.state_dict())
 

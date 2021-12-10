@@ -35,18 +35,22 @@ class DQN(object):
         self.opt = Adam(self.q_network.parameters(), lr=self.lr)
         self.target = Model((4,84,84),self.action_space)
         self.sync_weights()
+
         if use_cuda:
             print("GPU being used:", torch.cuda.get_device_name(0))
             self.q_network.cuda(self.device)
             self.target.cuda(self.device)
+        for p in self.target.parameters():
+            p.requires_grad = False
         self.target.eval()
         self.loss_fn = torch.nn.MSELoss()
 
         # DQN setup
-        self.buff = 2000
+        self.buff = 10000
         self.memory = ER_Memory(self.buff)
         self.counter = 0
-        self.update_target = 1
+        self.update_target = 100
+        self.learn_every = 10
         self.step = 0
         self.train_start = 1
         self.current_episode = 0
@@ -70,7 +74,7 @@ class DQN(object):
 
     def preprocess_state(self, x):
         state = np.stack(x)
-        state = torch.from_numpy(state).float().to(self.device)
+        state = torch.from_numpy(state).float().cuda(self.device)
         return state
 
     def run_episode(self):
@@ -86,11 +90,8 @@ class DQN(object):
 
             s2, reward, done, _ = self.env.step(action)
             self.total_reward += reward
-            self.remember(s1,
-                          action,
-                          reward,
-                          s2,
-                          done)
+            self.remember(s1, action, reward,s2, done)
+
             if done:
                 self.episode_time = time.time() - start_time
                 self.episode_times.append(self.episode_time)
@@ -106,46 +107,46 @@ class DQN(object):
             total_loss += self.learn()
 
             steps += 1
-            if steps % 10 == 0:
+            if steps % self.update_target == 0:
                 self.sync_weights()
 
     def learn(self):
         if len(self.memory) < self.train_start:
             return 0
+        if len(self.memory) > self.batch:
+            if self.epsilon > self.epsilon_min:
+                self.epsilon *= self.epsilon_decay
+        if self.counter % self.learn_every== 0:
+            minibatch = self.memory.sample(min(len(self.memory), self.batch))
+            states =  self.preprocess_state(minibatch[:, 0])
+            actions = self.preprocess_state(minibatch[:, 1]).type(torch.int64).unsqueeze(-1)
+            rewards = self.preprocess_state(minibatch[:, 2])
+            next_states = self.preprocess_state( minibatch[:, 3])
+            dones = self.preprocess_state(minibatch[:, 4])
+            # DQN
 
-        minibatch = self.memory.sample(min(len(self.memory), self.batch))
-        states = self.preprocess_state(minibatch[:, 0])
-        actions = self.preprocess_state(minibatch[:, 1]).type(torch.int64).unsqueeze(-1)
-        rewards = self.preprocess_state(minibatch[:, 2])
-        next_states = self.preprocess_state(minibatch[:, 3])
-        dones = self.preprocess_state(minibatch[:, 4])
-        # DQN
+            self.q_network.train()
+            self.target.eval()
+            # Q
+            Q = self.q_network.forward(states).gather(1, actions).squeeze(-1)  # Q(s, a, wq)
+            # target
+            Q_next = self.target.forward(next_states).max(1)[0].detach()  # max _a Q(ns, a, wt)
+            y = rewards + self.gamma * (1 - dones) * Q_next  # bellman
+            self.opt.zero_grad()
+            loss = self.loss_fn(y, Q)
+            loss.backward()
+            for param in self.q_network.parameters():
+                param.grad.data.clamp_(-1, 1)
+            self.opt.step()
 
-        self.q_network.train()
-        self.target.eval()
-        # Q
-        Q = self.q_network.forward(states).gather(1, actions).squeeze(-1)  # Q(s, a, wq)
-        # target
-        Q_next = self.target.forward(next_states).max(1)[0].detach()  # max _a Q(ns, a, wt)
-        y = rewards + self.gamma * (1 - dones) * Q_next  # bellman
-        self.opt.zero_grad()
-        loss = self.loss_fn(y, Q)
-        loss.backward()
-        for param in self.q_network.parameters():
-            param.grad.data.clamp_(-1, 1)
-        self.opt.step()
-
-        return loss.item()
-
+            return loss.item()
+        return 0
     def sync_weights(self):
         self.target.load_state_dict(self.q_network.state_dict())
 
     def get_action(self, obs):
-        # obs= torch.from_numpy(obs.__array__()).unsqueeze(0).float().to(self.device)
 
-        if len(self.memory) > self.batch:
-            if self.epsilon > self.epsilon_min:
-                self.epsilon *= self.epsilon_decay
+
         if np.random.random() <= self.epsilon:
             return self.env.action_space.sample()
         else:
@@ -156,7 +157,13 @@ class DQN(object):
     def remember(self, state, action, reward, next_state, done):
         self.memory.remember(state, action, reward, next_state, done)
         self.counter += 1
-
+    def save(self):
+        save_path = (
+            "{}\\sonic_model_{}.chkpt".format(self.name,int(self.current_episode))
+        )
+        # self.episode +=1
+        torch.save(dict(model=self.policy.state_dict() ,epsilon=self.epsilon),save_path)
+        print("SonicModel saved to {} at step {}".format(save_path, self.counter))
 
 torch.cuda.empty_cache()
 agent_dqn = DQN()
@@ -173,8 +180,8 @@ for i in range(agent_dqn.episodes):
         agent_dqn.epsilon
     ), flush=True, end="")
 
-plt.plot(np.arange(1,201), agent_dqn.rewards)
-plt.plot(np.arange(1,201), agent_dqn.avg_reward)
+plt.plot(np.arange(1,agent_dqn.episodes), agent_dqn.rewards)
+plt.plot(np.arange(1,agent_dqn.episodes), agent_dqn.avg_reward)
 
 plt.title(agent_dqn.name)
 plt.show()
