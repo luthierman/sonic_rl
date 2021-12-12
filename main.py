@@ -1,8 +1,13 @@
 
 # https://pythonprojects.io/ai-plays-sonic/
 from models import Model
-import sonic_env
-env = sonic_env.make("SonicTheHedgehog-Genesis", "GreenhillZone.Act1")
+import retro
+
+import gym_super_mario_bros
+
+
+env = gym_super_mario_bros.make('SuperMarioBros-1-1-v0')
+# env = sonic_env.make("SonicTheHedgehog-Genesis", "GreenhillZone.Act1")
 done = True
 for step in range(5000):
     if done:

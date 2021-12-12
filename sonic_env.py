@@ -80,14 +80,14 @@ class AllowBacktracking(gym.Wrapper):
         return observation, reward, done, info
 
 
-def make_env(game, level, scale_rew=True):
-    env = make(game=game, state=level)
+def make_env(game, level,scale_rew=True, record=None ):
+    env = make(game=game, state=level, record=record)
     env = ActionsDiscretizer(env)
     if scale_rew:
         env = RewardScaler(env)
     env = PreprocessFrame(env)
     env = FrameStack(env, 4)
-    # env = AllowBacktracking(env)
+    env = AllowBacktracking(env)
     return env
 
 

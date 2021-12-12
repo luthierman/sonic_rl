@@ -1,4 +1,4 @@
-
+import gym
 import matplotlib.pyplot as plt
 from torch.optim import *
 import torch
@@ -12,10 +12,13 @@ import datetime
 from experience_replay import *
 import sonic_env
 from models import Model
+from logger import MetricLogger
 class DQN(object):
     def __init__(self) -> None:
         # GYM environment
-        self.env = sonic_env.make_env("SonicTheHedgehog-Genesis", "GreenhillZone.Act1")
+        self.name = "DQN_{}".format(1)
+        self.log_path = os.getcwd() + "\logs" + "\{}".format(self.name)
+        self.env = sonic_env.make_env("SonicTheHedgehog-Genesis", "GreenhillZone.Act1", record=self.log_path)
         self.action_space = self.env.action_space.n
         self.state_space = (4,84,84)
 
@@ -67,11 +70,10 @@ class DQN(object):
         self.total_reward = 0
         self.avg_reward = deque(maxlen=self.episodes)
         self.rs = deque(maxlen=50)
-
+        self.save_every = 5e5
         # save model
-        self.log_path = os.getcwd() + "\logs"
-        self.name = "DQN_{}".format(datetime.datetime.now())
 
+        self.logger = MetricLogger(self.log_path)
     def preprocess_state(self, x):
         state = np.stack(x)
         state = torch.from_numpy(state).float().cuda(self.device)
@@ -85,7 +87,7 @@ class DQN(object):
         self.total_reward = 0
         total_loss = 0
         while not done:
-            self.env.render()
+            # self.env.render()
             action = self.get_action(s1)
 
             s2, reward, done, _ = self.env.step(action)
@@ -103,16 +105,20 @@ class DQN(object):
                 self.avg_reward.append(self.avg)
                 self.current_episode += 1
                 break
+            loss, q = self.learn()
+            if loss != None:
+                total_loss += loss
             s1 = s2
-            total_loss += self.learn()
-
             steps += 1
+
             if steps % self.update_target == 0:
                 self.sync_weights()
+            if steps % self.save_every==0:
+                self.save_model()
 
     def learn(self):
         if len(self.memory) < self.train_start:
-            return 0
+            return None, None
         if len(self.memory) > self.batch:
             if self.epsilon > self.epsilon_min:
                 self.epsilon *= self.epsilon_decay
@@ -139,14 +145,13 @@ class DQN(object):
                 param.grad.data.clamp_(-1, 1)
             self.opt.step()
 
-            return loss.item()
-        return 0
+            return loss.item(), y.mean().item()
+        return None, None
+
     def sync_weights(self):
         self.target.load_state_dict(self.q_network.state_dict())
 
     def get_action(self, obs):
-
-
         if np.random.random() <= self.epsilon:
             return self.env.action_space.sample()
         else:
@@ -157,19 +162,24 @@ class DQN(object):
     def remember(self, state, action, reward, next_state, done):
         self.memory.remember(state, action, reward, next_state, done)
         self.counter += 1
-    def save(self):
-        save_path = (
-            "{}\\sonic_model_{}.chkpt".format(self.name,int(self.current_episode))
-        )
-        # self.episode +=1
-        torch.save(dict(model=self.policy.state_dict() ,epsilon=self.epsilon),save_path)
-        print("SonicModel saved to {} at step {}".format(save_path, self.counter))
-
+    def save_model(self):
+        torch.save(dict(model=self.q_network.state_dict() ,epsilon=self.epsilon),self.log_path)
+        print("SonicModel saved to {} at step {}".format(self.log_path, self.counter))
+    def save_stats(self):
+        np.save("episode_time.npy",np.round(self.episode_time))
+        np.save("avg_reward.npy", self.avg)
+        np.save("total_reward.npy",self.total_reward)
+        np.save("no_steps.npy", self.no_steps[i])
+        np.save("epsilon.npy", self.epsilon)
+        np.save("q_value.npy", self.q_values)
 torch.cuda.empty_cache()
 agent_dqn = DQN()
 print(agent_dqn.name)
-for i in range(agent_dqn.episodes):
+for i in range(100):
     agent_dqn.run_episode()
+    agent_dqn.logger.log_episode()
+    agent_dqn.logger.record(episode=i, epsilon=agent_dqn.epsilon, step=agent_dqn.counter)
+
     print("\rEpisode {}/{} [{} sec.]|| Current Avg {}, Episode Reward {}, Steps {}, eps {}".format(
         agent_dqn.current_episode,
         agent_dqn.episodes,
