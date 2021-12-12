@@ -13,9 +13,14 @@ import datetime
 from experience_replay import *
 import sonic_env
 from models import Model
+from pathlib import Path
+from logger import MetricLogger
 
 class DDQN(object):
     def __init__(self) -> None:
+        self.name = "DDQN_{}".format(1)
+        self.log_path = Path(".\\{}".format(self.name)) / datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        self.log_path.mkdir(parents=True)
         # GYM environment
         self.env = sonic_env.make_env("SonicTheHedgehog-Genesis", "GreenhillZone.Act1")
 
@@ -71,8 +76,7 @@ class DDQN(object):
         self.rs = deque(maxlen=50)
 
         # save model
-        self.log_path = os.getcwd() + "\logs"
-        self.name = "DDQN_Dense_{}".format(datetime.datetime.now())
+        self.save_every = 1e5
 
     def preprocess_state(self, x):
         state = np.stack(x)
@@ -109,15 +113,20 @@ class DDQN(object):
                 self.current_episode += 1
                 break
             s1 = s2
-            total_loss += self.learn()
+            loss, q = self.learn()
+            if loss != None:
+                total_loss += loss
+                self.logger.log_step(reward, loss, q)
 
             steps += 1
             if steps % 10 == 0:
                 self.sync_weights()
+            if steps % self.save_every==0:
+                self.save_model()
 
     def learn(self):
         if len(self.memory) < self.train_start:
-            return 0
+            return None, None
         if self.counter%self.learn_every==0:
             minibatch = self.memory.sample(min(len(self.memory), self.batch))
             states = self.preprocess_state(minibatch[:, 0])
@@ -139,8 +148,9 @@ class DDQN(object):
             for param in self.q_network.parameters():
                 param.grad.data.clamp_(-1, 1)
             self.opt.step()
-            return loss.item()
-        return 0
+            return loss.item(), y.mean().item()
+
+        return None, None
     def sync_weights(self):
         self.target.load_state_dict(self.q_network.state_dict())
 
@@ -159,12 +169,25 @@ class DDQN(object):
         self.memory.remember(state, action, reward, next_state, done)
         self.counter += 1
 
+    def save_model(self):
+        torch.save(dict(model=self.q_network.state_dict() ,epsilon=self.epsilon),self.log_path / "q_network.pt")
+        print("SonicModel saved to {} at step {}".format(self.log_path, self.counter))
+    def save_stats(self):
+        np.save("episode_time.npy",np.round(self.episode_time))
+        np.save("avg_reward.npy", self.avg)
+        np.save("total_reward.npy",self.total_reward)
+        np.save("no_steps.npy", self.no_steps[i])
+        np.save("epsilon.npy", self.epsilon)
+        np.save("q_value.npy", self.q_values)
 
 agent_ddqn = DDQN()
 print(agent_ddqn.name)
 
 for i in range(agent_ddqn.episodes):
     agent_ddqn.run_episode()
+    agent_ddqn.logger.log_episode()
+    agent_ddqn.logger.record(episode=i, epsilon=agent_ddqn.epsilon, step=agent_ddqn.counter)
+    agent_ddqn.save_stats()
     print("\rEpisode {}/{} [{} sec.]|| Current Avg {}, Episode Reward {}, Steps {}, eps {}".format(
         agent_ddqn.current_episode,
         agent_ddqn.episodes,

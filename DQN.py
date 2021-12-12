@@ -13,11 +13,14 @@ from experience_replay import *
 import sonic_env
 from models import Model
 from logger import MetricLogger
+from pathlib import Path
 class DQN(object):
     def __init__(self) -> None:
         # GYM environment
         self.name = "DQN_{}".format(1)
-        self.log_path = os.getcwd() + "\logs" + "\{}".format(self.name)
+        self.log_path = Path(".\\{}".format(self.name))/ datetime.datetime.now().strftime("%Y-%m-%dT%H-%M-%S")
+        self.log_path.mkdir(parents=True)
+
         self.env = sonic_env.make_env("SonicTheHedgehog-Genesis", "GreenhillZone.Act1", record=self.log_path)
         self.action_space = self.env.action_space.n
         self.state_space = (4,84,84)
@@ -70,7 +73,7 @@ class DQN(object):
         self.total_reward = 0
         self.avg_reward = deque(maxlen=self.episodes)
         self.rs = deque(maxlen=50)
-        self.save_every = 5e5
+        self.save_every = 1e5
         # save model
 
         self.logger = MetricLogger(self.log_path)
@@ -108,6 +111,8 @@ class DQN(object):
             loss, q = self.learn()
             if loss != None:
                 total_loss += loss
+                self.logger.log_step(reward, loss, q)
+
             s1 = s2
             steps += 1
 
@@ -163,7 +168,7 @@ class DQN(object):
         self.memory.remember(state, action, reward, next_state, done)
         self.counter += 1
     def save_model(self):
-        torch.save(dict(model=self.q_network.state_dict() ,epsilon=self.epsilon),self.log_path)
+        torch.save(dict(model=self.q_network.state_dict() ,epsilon=self.epsilon),self.log_path / "q_network.pt")
         print("SonicModel saved to {} at step {}".format(self.log_path, self.counter))
     def save_stats(self):
         np.save("episode_time.npy",np.round(self.episode_time))
@@ -179,7 +184,7 @@ for i in range(100):
     agent_dqn.run_episode()
     agent_dqn.logger.log_episode()
     agent_dqn.logger.record(episode=i, epsilon=agent_dqn.epsilon, step=agent_dqn.counter)
-
+    agent_dqn.save_stats()
     print("\rEpisode {}/{} [{} sec.]|| Current Avg {}, Episode Reward {}, Steps {}, eps {}".format(
         agent_dqn.current_episode,
         agent_dqn.episodes,
